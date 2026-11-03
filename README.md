@@ -1,6 +1,6 @@
-# 🩸 Blood Registry — NSS Blood Donation Cell
+# 🩸 Blood Registry — Blood Donation Cell
 
-A web-based blood donor management portal developed for the **NSS Blood Donation Cell**. The application helps coordinators manage donor records and allows faculty members to view registered donors.
+A web-based blood donor management portal developed for the **Blood Donation Cell**. The application helps coordinators manage donor records and allows faculty members to view registered donors.
 
 🔗 **GitHub Repository:** [Blood-Registry](https://github.com/sanumuhammedm06-cell/Blood-Registry)
 
