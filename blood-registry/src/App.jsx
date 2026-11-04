@@ -24,6 +24,7 @@ const classHours = [
 
 const emptyDonorForm = {
   name: '',
+  roll_number: '',
   bloodgroup: '',
   phone: '',
   department: '',
@@ -41,7 +42,6 @@ function getTodayDate() {
   )}`
 }
 
-// Convert a database timestamp into the value expected by datetime-local.
 function toDateTimeLocal(value) {
   if (!value) return ''
 
@@ -57,7 +57,6 @@ function toDateTimeLocal(value) {
   )
 }
 
-// Convert a datetime-local value into an ISO timestamp for Supabase.
 function fromDateTimeLocal(value) {
   if (!value) return null
 
@@ -68,7 +67,6 @@ function fromDateTimeLocal(value) {
   return date.toISOString()
 }
 
-// Display a database timestamp in the user's local date and time.
 function formatDateTime(value) {
   if (!value) return '—'
 
@@ -79,7 +77,6 @@ function formatDateTime(value) {
   return date.toLocaleString()
 }
 
-// Calculate the time between check-in and check-out.
 function calculateDuration(checkInValue, checkOutValue) {
   if (!checkInValue || !checkOutValue) return '—'
 
@@ -120,7 +117,7 @@ function App() {
   const [donorForm, setDonorForm] = useState(emptyDonorForm)
   const [editingDonorId, setEditingDonorId] = useState(null)
 
-  // Class-time log state
+  // Class-hour credit state
   const [classLogs, setClassLogs] = useState([])
   const [classLogsLoading, setClassLogsLoading] = useState(false)
   const [classLogsError, setClassLogsError] = useState('')
@@ -249,6 +246,7 @@ function App() {
 
     setDonorForm({
       name: donor.full_name || '',
+      roll_number: donor.roll_number || '',
       bloodgroup: donor.blood_group || '',
       phone: donor.phone || '',
       department: donor.department || '',
@@ -270,6 +268,7 @@ function App() {
 
     const donorData = {
       full_name: donorForm.name.trim(),
+      roll_number: donorForm.roll_number.trim().toUpperCase(),
       blood_group: donorForm.bloodgroup,
       phone: donorForm.phone.trim(),
       department: donorForm.department.trim(),
@@ -302,13 +301,19 @@ function App() {
       resetDonorForm()
       await fetchDonors()
     } catch (error) {
-      setDonorError(error.message || 'Could not save donor.')
+      if (error.code === '23505') {
+        setDonorError(
+          'This roll number is already registered. Please check the roll number.'
+        )
+      } else {
+        setDonorError(error.message || 'Could not save donor.')
+      }
     } finally {
       setSavingDonor(false)
     }
   }
 
-  // Fetch saved class-time credits and the related donor information.
+  // Fetch saved class-hour credits and related student information.
   async function fetchClassLogs() {
     setClassLogsLoading(true)
     setClassLogsError('')
@@ -324,6 +329,7 @@ function App() {
           created_at,
           donor:donors (
             full_name,
+            roll_number,
             department,
             batch
           )
@@ -407,7 +413,7 @@ function App() {
         )
       } else {
         setClassLogsError(
-          error.message || 'Could not save class-time credits.'
+          error.message || 'Could not save class-hour credits.'
         )
       }
     } finally {
@@ -474,6 +480,19 @@ function App() {
                       setDonorForm({
                         ...donorForm,
                         name: event.target.value,
+                      })
+                    }
+                    required
+                  />
+
+                  <input
+                    type="text"
+                    placeholder="College Roll Number (e.g. B25CSB59)"
+                    value={donorForm.roll_number}
+                    onChange={(event) =>
+                      setDonorForm({
+                        ...donorForm,
+                        roll_number: event.target.value.toUpperCase(),
                       })
                     }
                     required
@@ -612,6 +631,7 @@ function App() {
                   <thead>
                     <tr>
                       <th>Name</th>
+                      <th>Roll Number</th>
                       <th>Blood Group</th>
                       <th>Phone</th>
                       <th>Department</th>
@@ -628,6 +648,7 @@ function App() {
                     {donors.map((donor) => (
                       <tr key={donor.id}>
                         <td>{donor.full_name}</td>
+                        <td>{donor.roll_number || '—'}</td>
 
                         <td>
                           <span className="blood-group-badge">
@@ -693,6 +714,7 @@ function App() {
                   <thead>
                     <tr>
                       <th>Student Name</th>
+                      <th>Roll Number</th>
                       <th>Department</th>
                       <th>Batch</th>
                       <th>Check-In</th>
@@ -705,6 +727,7 @@ function App() {
                     {donors.map((donor) => (
                       <tr key={donor.id}>
                         <td>{donor.full_name}</td>
+                        <td>{donor.roll_number || '—'}</td>
                         <td>{donor.department || '—'}</td>
                         <td>{donor.batch || '—'}</td>
                         <td>{formatDateTime(donor.check_in_at)}</td>
@@ -777,7 +800,7 @@ function App() {
 
                       {donors.map((donor) => (
                         <option key={donor.id} value={donor.id}>
-                          {donor.full_name} —{' '}
+                          {donor.full_name} — {donor.roll_number || 'No roll number'} —{' '}
                           {donor.department || 'No department'}
                           {donor.batch ? ` (${donor.batch})` : ''}
                         </option>
@@ -812,8 +835,8 @@ function App() {
                     <label
                       key={hour.number}
                       className={`class-hour-option ${classLogForm.hours.includes(hour.number)
-                        ? 'selected'
-                        : ''
+                          ? 'selected'
+                          : ''
                         }`}
                     >
                       <input
@@ -873,6 +896,7 @@ function App() {
                   <thead>
                     <tr>
                       <th>Student</th>
+                      <th>Roll Number</th>
                       <th>Department</th>
                       <th>Batch</th>
                       <th>Date</th>
@@ -892,6 +916,7 @@ function App() {
                           <td>
                             {log.donor?.full_name || 'Unknown student'}
                           </td>
+                          <td>{log.donor?.roll_number || '—'}</td>
                           <td>{log.donor?.department || '—'}</td>
                           <td>{log.donor?.batch || '—'}</td>
                           <td>{log.credit_date}</td>
