@@ -5,6 +5,7 @@ import './App.css'
 
 const navItems = [
   { id: 'overview', label: 'Overview', icon: '▦' },
+  { id: 'drives', label: 'Drive Management', icon: '♥' },
   { id: 'donors', label: 'Donor Registry', icon: '♡' },
   { id: 'attendance', label: 'Attendance', icon: '✓' },
   { id: 'logs', label: 'Class-Time Logs', icon: '◷' },
@@ -25,7 +26,7 @@ const classHours = [
 const emptyDonorForm = {
   name: '',
   roll_number: '',
-  bloodgroup: '',
+  blood_group: '',
   phone: '',
   department: '',
   batch: '',
@@ -33,48 +34,38 @@ const emptyDonorForm = {
   check_out_at: '',
 }
 
+const emptyDriveForm = {
+  name: '',
+  description: '',
+  location: '',
+  start_date: getTodayDate(),
+  end_date: '',
+}
+
 function getTodayDate() {
   const date = new Date()
   const pad = (number) => String(number).padStart(2, '0')
-
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
-    date.getDate()
-  )}`
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
 function toDateTimeLocal(value) {
   if (!value) return ''
-
   const date = new Date(value)
-
   if (Number.isNaN(date.getTime())) return ''
-
   const pad = (number) => String(number).padStart(2, '0')
-
-  return (
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
-  )
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
 function fromDateTimeLocal(value) {
   if (!value) return null
-
   const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) return null
-
-  return date.toISOString()
+  return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
 function formatDateTime(value) {
   if (!value) return '—'
-
   const date = new Date(value)
-
-  if (Number.isNaN(date.getTime())) return '—'
-
-  return date.toLocaleString()
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString()
 }
 
 function calculateDuration(checkInValue, checkOutValue) {
@@ -87,18 +78,15 @@ function calculateDuration(checkInValue, checkOutValue) {
     Number.isNaN(checkIn.getTime()) ||
     Number.isNaN(checkOut.getTime()) ||
     checkOut < checkIn
-  ) {
-    return '—'
-  }
+  ) return '—'
 
-  const totalMinutes = Math.floor((checkOut - checkIn) / 60000)
-  const hours = Math.floor(totalMinutes / 60)
-  const minutes = totalMinutes % 60
-
-  return `${hours}h ${minutes}m`
+  const minutes = Math.floor((checkOut - checkIn) / 60000)
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
 function App() {
+  // ---------------- AUTHENTICATION ----------------
+
   const [role, setRole] = useState('coordinator')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -108,16 +96,35 @@ function App() {
   const [userProfile, setUserProfile] = useState(null)
   const [activePage, setActivePage] = useState('overview')
 
-  // Donor registry state
+  // ---------------- DRIVES ----------------
+
+  const [drives, setDrives] = useState([])
+  const [selectedDriveId, setSelectedDriveId] = useState('')
+  const [drivesLoading, setDrivesLoading] = useState(false)
+  const [driveError, setDriveError] = useState('')
+  const [showDriveForm, setShowDriveForm] = useState(false)
+  const [savingDrive, setSavingDrive] = useState(false)
+  const [driveForm, setDriveForm] = useState(emptyDriveForm)
+
+  // ---------------- DONORS ----------------
+
   const [donors, setDonors] = useState([])
+  const [allDonors, setAllDonors] = useState([])
   const [donorsLoading, setDonorsLoading] = useState(false)
   const [donorError, setDonorError] = useState('')
   const [showDonorForm, setShowDonorForm] = useState(false)
   const [savingDonor, setSavingDonor] = useState(false)
   const [donorForm, setDonorForm] = useState(emptyDonorForm)
   const [editingDonorId, setEditingDonorId] = useState(null)
+  const [existingDonorId, setExistingDonorId] = useState('')
 
-  // Class-hour credit state
+  // Student removal popup
+  const [removingDonorId, setRemovingDonorId] = useState(null)
+  const [pendingDonorRemoval, setPendingDonorRemoval] = useState(null)
+  const [removalError, setRemovalError] = useState('')
+
+  // ---------------- CLASS-HOUR CREDITS ----------------
+
   const [classLogs, setClassLogs] = useState([])
   const [classLogsLoading, setClassLogsLoading] = useState(false)
   const [classLogsError, setClassLogsError] = useState('')
@@ -129,6 +136,17 @@ function App() {
     credit_date: getTodayDate(),
     hours: [],
   })
+
+  // ---------------- DERIVED VALUES ----------------
+
+  const selectedDrive = drives.find(
+    (drive) => String(drive.id) === String(selectedDriveId)
+  )
+
+  const isCoordinator = userProfile?.role === 'coordinator'
+  const driveIsWritable = selectedDrive?.status === 'active'
+
+  // ---------------- AUTHENTICATION FUNCTIONS ----------------
 
   async function handleLogin(event) {
     event.preventDefault()
@@ -142,40 +160,31 @@ function App() {
         password,
       })
 
-      if (error) {
-        setMessage(error.message)
-        return
-      }
-
-      const userId = data.user.id
+      if (error) throw error
 
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id, full_name, role')
-        .eq('id', userId)
+        .eq('id', data.user.id)
         .single()
 
       if (profileError || !profile) {
         await supabase.auth.signOut()
-        setMessage(
-          'Your login exists, but your profile could not be found. Please contact the administrator.'
-        )
-        return
+        throw new Error('Your login exists, but your profile could not be found.')
       }
 
       if (profile.role !== role) {
         await supabase.auth.signOut()
-        setMessage(
-          `This account is registered as ${profile.role}. Please select the correct login role.`
+        throw new Error(
+          `This account is registered as ${profile.role}. Select the correct role.`
         )
-        return
       }
 
       setUserProfile(profile)
       setActivePage('overview')
       setMessage('')
     } catch (error) {
-      setMessage(error.message || 'Something went wrong. Please try again.')
+      setMessage(error.message || 'Could not sign in.')
     } finally {
       setLoading(false)
     }
@@ -190,52 +199,285 @@ function App() {
     setMessage('')
     setActivePage('overview')
 
+    setDrives([])
+    setSelectedDriveId('')
     setDonors([])
-    setDonorError('')
-    setShowDonorForm(false)
-    setDonorForm(emptyDonorForm)
-    setEditingDonorId(null)
-
+    setAllDonors([])
     setClassLogs([])
-    setClassLogsError('')
-    setShowClassLogForm(false)
-    setClassLogForm({
-      donor_id: '',
-      credit_date: getTodayDate(),
-      hours: [],
-    })
+
+    setPendingDonorRemoval(null)
+    setRemovalError('')
+    setRemovingDonorId(null)
+
+    resetDonorForm()
+    resetClassLogForm()
   }
 
+  // ---------------- DRIVE MANAGEMENT ----------------
+
+  async function fetchDrives() {
+    setDrivesLoading(true)
+    setDriveError('')
+
+    try {
+      const { data, error } = await supabase
+        .from('drives')
+        .select('*')
+        .order('start_date', { ascending: false })
+
+      if (error) throw error
+
+      const rows = data || []
+      setDrives(rows)
+
+      setSelectedDriveId((current) => {
+        if (rows.some((drive) => String(drive.id) === String(current))) {
+          return current
+        }
+
+        const activeDrive = rows.find((drive) => drive.status === 'active')
+        return String(activeDrive?.id || rows[0]?.id || '')
+      })
+    } catch (error) {
+      setDriveError(error.message || 'Could not load drives.')
+    } finally {
+      setDrivesLoading(false)
+    }
+  }
+
+  async function fetchAllDonors() {
+    try {
+      const { data, error } = await supabase
+        .from('donors')
+        .select('id, full_name, roll_number, blood_group, phone, department, batch')
+        .order('full_name')
+
+      if (error) throw error
+      setAllDonors(data || [])
+    } catch (error) {
+      setDonorError(error.message || 'Could not load student profiles.')
+    }
+  }
+
+  async function handleCreateDrive(event) {
+    event.preventDefault()
+
+    if (!isCoordinator) return
+
+    if (!driveForm.name.trim()) {
+      setDriveError('Enter a drive name.')
+      return
+    }
+
+    if (!driveForm.start_date) {
+      setDriveError('Select a start date.')
+      return
+    }
+
+    if (driveForm.end_date && driveForm.end_date < driveForm.start_date) {
+      setDriveError('The end date cannot be before the start date.')
+      return
+    }
+
+    setSavingDrive(true)
+    setDriveError('')
+
+    try {
+      const { data, error } = await supabase
+        .from('drives')
+        .insert({
+          name: driveForm.name.trim(),
+          description: driveForm.description.trim() || null,
+          location: driveForm.location.trim() || null,
+          start_date: driveForm.start_date,
+          end_date: driveForm.end_date || null,
+          status: 'active',
+          created_by: userProfile.id,
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+
+      setDriveForm(emptyDriveForm)
+      setShowDriveForm(false)
+
+      await fetchDrives()
+
+      setSelectedDriveId(String(data.id))
+      setActivePage('donors')
+    } catch (error) {
+      setDriveError(error.message || 'Could not create drive.')
+    } finally {
+      setSavingDrive(false)
+    }
+  }
+
+  async function changeDriveStatus(drive, newStatus) {
+    if (!isCoordinator) return
+
+    const actionText =
+      newStatus === 'completed' ? 'mark as completed' : 'archive'
+
+    const confirmed = window.confirm(
+      `Are you sure you want to ${actionText} "${drive.name}"?\n\nThis will not delete its records.`
+    )
+
+    if (!confirmed) return
+
+    setDriveError('')
+
+    try {
+      const updates = { status: newStatus }
+
+      if (newStatus === 'archived') {
+        updates.archived_at = new Date().toISOString()
+      }
+
+      const { error } = await supabase
+        .from('drives')
+        .update(updates)
+        .eq('id', drive.id)
+
+      if (error) throw error
+
+      await fetchDrives()
+    } catch (error) {
+      setDriveError(error.message || 'Could not update drive.')
+    }
+  }
+
+  // ---------------- DONOR REGISTRY ----------------
+
   async function fetchDonors() {
+    if (!selectedDriveId) {
+      setDonors([])
+      return
+    }
+
     setDonorsLoading(true)
     setDonorError('')
 
     try {
       const { data, error } = await supabase
-        .from('donors')
-        .select('*')
+        .from('drive_donors')
+        .select(`
+          id,
+          drive_id,
+          donor_id,
+          check_in_at,
+          check_out_at,
+          donor:donors (
+            id,
+            full_name,
+            roll_number,
+            blood_group,
+            phone,
+            department,
+            batch
+          )
+        `)
+        .eq('drive_id', Number(selectedDriveId))
         .order('created_at', { ascending: false })
 
       if (error) throw error
 
-      setDonors(data || [])
+      setDonors(
+        (data || [])
+          .filter((item) => item.donor)
+          .map((item) => ({
+            ...item.donor,
+            participation_id: item.id,
+            check_in_at: item.check_in_at,
+            check_out_at: item.check_out_at,
+          }))
+      )
     } catch (error) {
-      setDonorError(error.message || 'Could not load donors.')
+      setDonorError(error.message || 'Could not load drive donors.')
     } finally {
       setDonorsLoading(false)
+    }
+  }
+
+  // Open the custom removal confirmation popup.
+  function removeDonorFromDrive(donor) {
+    if (
+      !isCoordinator ||
+      !driveIsWritable ||
+      !selectedDriveId ||
+      !selectedDrive
+    ) {
+      return
+    }
+
+    setRemovalError('')
+    setPendingDonorRemoval(donor)
+  }
+
+  // Perform the removal after confirmation.
+  async function confirmDonorRemoval() {
+    const donor = pendingDonorRemoval
+
+    if (
+      !donor ||
+      !isCoordinator ||
+      !driveIsWritable ||
+      !selectedDriveId
+    ) {
+      return
+    }
+
+    setRemovingDonorId(donor.id)
+    setRemovalError('')
+
+    try {
+      const { data, error } = await supabase
+        .from('drive_donors')
+        .delete()
+        .eq('id', donor.participation_id)
+        .eq('drive_id', Number(selectedDriveId))
+        .select('id')
+
+      if (error) throw error
+
+      if (!data || data.length === 0) {
+        throw new Error(
+          'No participation record was removed. Check your permissions and try again.'
+        )
+      }
+
+      await fetchDonors()
+
+      setPendingDonorRemoval(null)
+      setRemovalError('')
+    } catch (error) {
+      setRemovalError(
+        error.message || 'Could not remove the student from this drive.'
+      )
+    } finally {
+      setRemovingDonorId(null)
     }
   }
 
   function resetDonorForm() {
     setDonorForm(emptyDonorForm)
     setEditingDonorId(null)
+    setExistingDonorId('')
     setShowDonorForm(false)
-    setDonorError('')
   }
 
-  function handleOpenAddDonor() {
+  function openNewDonorForm() {
     setDonorForm(emptyDonorForm)
     setEditingDonorId(null)
+    setExistingDonorId('')
+    setDonorError('')
+    setShowDonorForm(true)
+  }
+
+  function openExistingDonorForm() {
+    setDonorForm(emptyDonorForm)
+    setEditingDonorId(null)
+    setExistingDonorId('')
     setDonorError('')
     setShowDonorForm(true)
   }
@@ -243,11 +485,12 @@ function App() {
   function handleEditDonor(donor) {
     setDonorError('')
     setEditingDonorId(donor.id)
+    setExistingDonorId('')
 
     setDonorForm({
       name: donor.full_name || '',
       roll_number: donor.roll_number || '',
-      bloodgroup: donor.blood_group || '',
+      blood_group: donor.blood_group || '',
       phone: donor.phone || '',
       department: donor.department || '',
       batch: donor.batch || '',
@@ -261,60 +504,147 @@ function App() {
   async function handleSaveDonor(event) {
     event.preventDefault()
 
-    if (!userProfile || userProfile.role !== 'coordinator') return
+    if (!isCoordinator || !selectedDriveId || !driveIsWritable) return
 
     setSavingDonor(true)
     setDonorError('')
 
-    const donorData = {
-      full_name: donorForm.name.trim(),
-      roll_number: donorForm.roll_number.trim().toUpperCase(),
-      blood_group: donorForm.bloodgroup,
-      phone: donorForm.phone.trim(),
-      department: donorForm.department.trim(),
-      batch: donorForm.batch.trim(),
-      check_in_at: fromDateTimeLocal(donorForm.check_in_at),
-      check_out_at: fromDateTimeLocal(donorForm.check_out_at),
-    }
-
     try {
-      let error
-
+      // Editing an existing student profile.
       if (editingDonorId !== null) {
-        const result = await supabase
+        const { error: profileError } = await supabase
           .from('donors')
-          .update(donorData)
+          .update({
+            full_name: donorForm.name.trim(),
+            roll_number: donorForm.roll_number.trim().toUpperCase(),
+            blood_group: donorForm.blood_group,
+            phone: donorForm.phone.trim(),
+            department: donorForm.department.trim(),
+            batch: donorForm.batch.trim(),
+          })
           .eq('id', editingDonorId)
 
-        error = result.error
-      } else {
-        const result = await supabase.from('donors').insert({
-          ...donorData,
-          created_by: userProfile.id,
-        })
+        if (profileError) throw profileError
 
-        error = result.error
+        const { error: participationError } = await supabase
+          .from('drive_donors')
+          .update({
+            check_in_at: fromDateTimeLocal(donorForm.check_in_at),
+            check_out_at: fromDateTimeLocal(donorForm.check_out_at),
+          })
+          .eq('drive_id', Number(selectedDriveId))
+          .eq('donor_id', editingDonorId)
+
+        if (participationError) throw participationError
       }
 
-      if (error) throw error
+      // Register an existing student profile.
+      else if (existingDonorId) {
+        const { error } = await supabase
+          .from('drive_donors')
+          .insert({
+            drive_id: Number(selectedDriveId),
+            donor_id: Number(existingDonorId),
+            check_in_at: fromDateTimeLocal(donorForm.check_in_at),
+            check_out_at: fromDateTimeLocal(donorForm.check_out_at),
+          })
+
+        if (error) {
+          if (error.code === '23505') {
+            throw new Error(
+              'This student is already registered for this drive.'
+            )
+          }
+
+          throw error
+        }
+      }
+
+      // Create a new permanent student profile.
+      else {
+        const { data: newDonor, error: insertError } = await supabase
+          .from('donors')
+          .insert({
+            full_name: donorForm.name.trim(),
+            roll_number: donorForm.roll_number.trim().toUpperCase(),
+            blood_group: donorForm.blood_group,
+            phone: donorForm.phone.trim(),
+            department: donorForm.department.trim(),
+            batch: donorForm.batch.trim(),
+            created_by: userProfile.id,
+          })
+          .select('id')
+          .single()
+
+        if (insertError) throw insertError
+
+        // Link the new profile to the selected drive.
+        const { error: linkError } = await supabase
+          .from('drive_donors')
+          .insert({
+            drive_id: Number(selectedDriveId),
+            donor_id: newDonor.id,
+            check_in_at: fromDateTimeLocal(donorForm.check_in_at),
+            check_out_at: fromDateTimeLocal(donorForm.check_out_at),
+          })
+
+        if (linkError) {
+          // Attempt to roll back the newly created profile.
+          const { error: rollbackError } = await supabase
+            .from('donors')
+            .delete()
+            .eq('id', newDonor.id)
+
+          if (rollbackError) {
+            throw new Error(
+              `The profile was created, but drive registration failed. Profile ID: ${newDonor.id}. Please contact the administrator.`
+            )
+          }
+
+          throw linkError
+        }
+      }
 
       resetDonorForm()
       await fetchDonors()
+      await fetchAllDonors()
     } catch (error) {
-      if (error.code === '23505') {
-        setDonorError(
-          'This roll number is already registered. Please check the roll number.'
-        )
-      } else {
-        setDonorError(error.message || 'Could not save donor.')
-      }
+      setDonorError(error.message || 'Could not save donor.')
     } finally {
       setSavingDonor(false)
     }
   }
 
-  // Fetch saved class-hour credits and related student information.
+  // ---------------- ATTENDANCE ----------------
+
+  async function updateParticipationTime(donor, field) {
+    if (!isCoordinator || !driveIsWritable) return
+
+    const currentValue = donor[field]
+    const nextValue = currentValue ? null : new Date().toISOString()
+
+    const { error } = await supabase
+      .from('drive_donors')
+      .update({ [field]: nextValue })
+      .eq('drive_id', Number(selectedDriveId))
+      .eq('donor_id', donor.id)
+
+    if (error) {
+      setDonorError(error.message || 'Could not update attendance.')
+      return
+    }
+
+    await fetchDonors()
+  }
+
+  // ---------------- CLASS-HOUR CREDITS ----------------
+
   async function fetchClassLogs() {
+    if (!selectedDriveId) {
+      setClassLogs([])
+      return
+    }
+
     setClassLogsLoading(true)
     setClassLogsError('')
 
@@ -323,6 +653,7 @@ function App() {
         .from('class_hour_credits')
         .select(`
           id,
+          drive_id,
           donor_id,
           credit_date,
           hour_number,
@@ -334,6 +665,7 @@ function App() {
             batch
           )
         `)
+        .eq('drive_id', Number(selectedDriveId))
         .order('credit_date', { ascending: false })
         .order('hour_number', { ascending: true })
 
@@ -341,7 +673,7 @@ function App() {
 
       setClassLogs(data || [])
     } catch (error) {
-      setClassLogsError(error.message || 'Could not load class-time logs.')
+      setClassLogsError(error.message || 'Could not load class-hour credits.')
     } finally {
       setClassLogsLoading(false)
     }
@@ -355,7 +687,6 @@ function App() {
     })
 
     setShowClassLogForm(false)
-    setClassLogsError('')
   }
 
   function toggleClassHour(hourNumber) {
@@ -370,20 +701,15 @@ function App() {
   async function handleSaveClassLog(event) {
     event.preventDefault()
 
-    if (!userProfile || userProfile.role !== 'coordinator') return
+    if (!isCoordinator || !selectedDriveId || !driveIsWritable) return
 
     if (!classLogForm.donor_id) {
       setClassLogsError('Please select a student.')
       return
     }
 
-    if (!classLogForm.credit_date) {
-      setClassLogsError('Please select a date.')
-      return
-    }
-
-    if (classLogForm.hours.length === 0) {
-      setClassLogsError('Please select at least one class hour.')
+    if (!classLogForm.credit_date || classLogForm.hours.length === 0) {
+      setClassLogsError('Select a date and at least one class hour.')
       return
     }
 
@@ -391,6 +717,7 @@ function App() {
     setClassLogsError('')
 
     const records = classLogForm.hours.map((hourNumber) => ({
+      drive_id: Number(selectedDriveId),
       donor_id: Number(classLogForm.donor_id),
       credit_date: classLogForm.credit_date,
       hour_number: hourNumber,
@@ -409,7 +736,7 @@ function App() {
     } catch (error) {
       if (error.code === '23505') {
         setClassLogsError(
-          'A credit already exists for this student, date, and hour. Check the saved records.'
+          'One or more selected class-hour credits already exist for this student, date and drive.'
         )
       } else {
         setClassLogsError(
@@ -421,372 +748,673 @@ function App() {
     }
   }
 
-  // Load records when the user opens the relevant page.
+  // ---------------- DATA LOADING ----------------
+
   useEffect(() => {
     if (!userProfile) return
 
-    if (activePage === 'donors' || activePage === 'attendance') {
-      fetchDonors()
+    fetchDrives()
+    fetchAllDonors()
+  }, [userProfile])
+
+  useEffect(() => {
+    if (!userProfile || !selectedDriveId) {
+      setDonors([])
+      setClassLogs([])
+      return
     }
 
-    if (activePage === 'logs') {
-      fetchDonors()
-      fetchClassLogs()
-    }
-  }, [userProfile, activePage])
+    fetchDonors()
+    fetchClassLogs()
+  }, [userProfile, selectedDriveId])
 
-  function renderDashboardContent() {
-    switch (activePage) {
-      case 'donors':
-        return (
-          <section className="dashboard-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Donor Registry</h2>
-                <p>Manage and view registered blood donors.</p>
+  // ---------------- DRIVE PAGE ----------------
+
+  function renderDrivesPage() {
+    return (
+      <section className="dashboard-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Drive Management</h2>
+            <p>Create drives and preserve their individual records.</p>
+          </div>
+
+          {isCoordinator && (
+            <button
+              className="primary-action"
+              type="button"
+              onClick={() => {
+                setShowDriveForm((current) => !current)
+                setDriveError('')
+              }}
+            >
+              {showDriveForm ? 'Cancel' : '+ Create Drive'}
+            </button>
+          )}
+        </div>
+
+        {driveError && <p className="donor-error">{driveError}</p>}
+
+        {showDriveForm && isCoordinator && (
+          <form className="donor-form" onSubmit={handleCreateDrive}>
+            <h3>Create a New Drive</h3>
+
+            <div className="donor-form-grid">
+              <input
+                placeholder="Drive name"
+                value={driveForm.name}
+                onChange={(event) =>
+                  setDriveForm({ ...driveForm, name: event.target.value })
+                }
+                required
+              />
+
+              <input
+                placeholder="Location"
+                value={driveForm.location}
+                onChange={(event) =>
+                  setDriveForm({ ...driveForm, location: event.target.value })
+                }
+              />
+
+              <div className="donor-time-field">
+                <label>Start date</label>
+                <input
+                  type="date"
+                  value={driveForm.start_date}
+                  onChange={(event) =>
+                    setDriveForm({
+                      ...driveForm,
+                      start_date: event.target.value,
+                    })
+                  }
+                  required
+                />
               </div>
 
-              {userProfile.role === 'coordinator' && (
+              <div className="donor-time-field">
+                <label>End date</label>
+                <input
+                  type="date"
+                  value={driveForm.end_date}
+                  onChange={(event) =>
+                    setDriveForm({
+                      ...driveForm,
+                      end_date: event.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <textarea
+                placeholder="Description (optional)"
+                value={driveForm.description}
+                onChange={(event) =>
+                  setDriveForm({
+                    ...driveForm,
+                    description: event.target.value,
+                  })
+                }
+              />
+            </div>
+
+            <div className="donor-form-actions">
+              <button className="primary-action" disabled={savingDrive}>
+                {savingDrive ? 'Creating...' : 'Create Drive'}
+              </button>
+
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={() => setShowDriveForm(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {drivesLoading ? (
+          <div className="empty-state">
+            <h3>Loading drives...</h3>
+          </div>
+        ) : drives.length === 0 ? (
+          <div className="empty-state">
+            <span className="empty-icon">♥</span>
+            <h3>No drives created yet</h3>
+            <p>A coordinator can create the first drive.</p>
+          </div>
+        ) : (
+          <div className="donor-table-wrapper">
+            <table className="donor-table">
+              <thead>
+                <tr>
+                  <th>Drive</th>
+                  <th>Location</th>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {drives.map((drive) => (
+                  <tr key={drive.id}>
+                    <td>
+                      <strong>{drive.name}</strong>
+                      {drive.description && <small>{drive.description}</small>}
+                    </td>
+
+                    <td>{drive.location || '—'}</td>
+                    <td>{drive.start_date}</td>
+                    <td>{drive.end_date || '—'}</td>
+
+                    <td>
+                      <span className="blood-group-badge">
+                        {drive.status}
+                      </span>
+                    </td>
+
+                    <td>
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        onClick={() =>
+                          setSelectedDriveId(String(drive.id))
+                        }
+                      >
+                        {String(selectedDriveId) === String(drive.id)
+                          ? 'Selected'
+                          : 'Select'}
+                      </button>
+
+                      {isCoordinator && drive.status === 'active' && (
+                        <>
+                          <button
+                            className="secondary-action"
+                            type="button"
+                            onClick={() =>
+                              changeDriveStatus(drive, 'completed')
+                            }
+                          >
+                            Complete
+                          </button>
+
+                          <button
+                            className="secondary-action"
+                            type="button"
+                            onClick={() =>
+                              changeDriveStatus(drive, 'archived')
+                            }
+                          >
+                            Archive
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    )
+  }
+
+  // ---------------- DONOR PAGE ----------------
+
+  function renderDonorPage() {
+    const linkedIds = new Set(donors.map((donor) => String(donor.id)))
+
+    const availableDonors = allDonors.filter(
+      (donor) => !linkedIds.has(String(donor.id))
+    )
+
+    return (
+      <section className="dashboard-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Donor Registry</h2>
+            <p>
+              {selectedDrive
+                ? `Students registered for ${selectedDrive.name}.`
+                : 'Select a drive to view its donors.'}
+            </p>
+          </div>
+
+          {isCoordinator && driveIsWritable && selectedDrive && (
+            <button
+              className="primary-action"
+              type="button"
+              onClick={() => {
+                if (showDonorForm) {
+                  resetDonorForm()
+                } else {
+                  openNewDonorForm()
+                }
+              }}
+            >
+              {showDonorForm ? 'Cancel' : '+ Add Donor'}
+            </button>
+          )}
+        </div>
+
+        {!selectedDrive && (
+          <div className="empty-state">
+            <h3>Select a drive first</h3>
+            <p>Open Drive Management and select a drive.</p>
+          </div>
+        )}
+
+        {selectedDrive && !driveIsWritable && (
+          <p className="donor-error">
+            This drive is {selectedDrive.status}. Its records are read-only.
+          </p>
+        )}
+
+        {showDonorForm && isCoordinator && driveIsWritable && (
+          <form className="donor-form" onSubmit={handleSaveDonor}>
+            <h3>
+              {editingDonorId !== null
+                ? 'Edit Student'
+                : existingDonorId
+                  ? 'Register Existing Student'
+                  : 'Register New Student'}
+            </h3>
+
+            {editingDonorId === null && (
+              <div className="donor-form-actions">
                 <button
-                  className="primary-action"
                   type="button"
+                  className="secondary-action"
                   onClick={() => {
-                    if (showDonorForm) {
-                      resetDonorForm()
-                    } else {
-                      handleOpenAddDonor()
-                    }
+                    setExistingDonorId('')
+                    setDonorForm(emptyDonorForm)
                   }}
                 >
-                  {showDonorForm ? 'Cancel' : '+ Add Donor'}
+                  Create New Profile
                 </button>
-              )}
-            </div>
 
-            {showDonorForm && userProfile.role === 'coordinator' && (
-              <form className="donor-form" onSubmit={handleSaveDonor}>
-                <h3>
-                  {editingDonorId !== null
-                    ? 'Edit Donor'
-                    : 'Register New Donor'}
-                </h3>
-
-                <div className="donor-form-grid">
-                  <input
-                    type="text"
-                    placeholder="Full name"
-                    value={donorForm.name}
-                    onChange={(event) =>
-                      setDonorForm({
-                        ...donorForm,
-                        name: event.target.value,
-                      })
-                    }
-                    required
-                  />
-
-                  <input
-                    type="text"
-                    placeholder="College Roll Number (e.g. B25CSB59)"
-                    value={donorForm.roll_number}
-                    onChange={(event) =>
-                      setDonorForm({
-                        ...donorForm,
-                        roll_number: event.target.value.toUpperCase(),
-                      })
-                    }
-                    required
-                  />
-
-                  <select
-                    value={donorForm.bloodgroup}
-                    onChange={(event) =>
-                      setDonorForm({
-                        ...donorForm,
-                        bloodgroup: event.target.value,
-                      })
-                    }
-                    required
-                  >
-                    <option value="">Select blood group</option>
-                    {bloodGroups.map((group) => (
-                      <option key={group} value={group}>
-                        {group}
-                      </option>
-                    ))}
-                  </select>
-
-                  <input
-                    type="tel"
-                    placeholder="Phone number"
-                    value={donorForm.phone}
-                    onChange={(event) =>
-                      setDonorForm({
-                        ...donorForm,
-                        phone: event.target.value,
-                      })
-                    }
-                    required
-                  />
-
-                  <input
-                    type="text"
-                    placeholder="Department"
-                    value={donorForm.department}
-                    onChange={(event) =>
-                      setDonorForm({
-                        ...donorForm,
-                        department: event.target.value,
-                      })
-                    }
-                    required
-                  />
-
-                  <input
-                    type="text"
-                    placeholder="Batch / Year"
-                    value={donorForm.batch}
-                    onChange={(event) =>
-                      setDonorForm({
-                        ...donorForm,
-                        batch: event.target.value,
-                      })
-                    }
-                    required
-                  />
-
-                  <div className="donor-time-field">
-                    <label htmlFor="donor-check-in">Check-in time</label>
-                    <input
-                      id="donor-check-in"
-                      type="datetime-local"
-                      value={donorForm.check_in_at}
-                      onChange={(event) =>
-                        setDonorForm({
-                          ...donorForm,
-                          check_in_at: event.target.value,
-                        })
-                      }
-                    />
-                  </div>
-
-                  <div className="donor-time-field">
-                    <label htmlFor="donor-check-out">Check-out time</label>
-                    <input
-                      id="donor-check-out"
-                      type="datetime-local"
-                      value={donorForm.check_out_at}
-                      onChange={(event) =>
-                        setDonorForm({
-                          ...donorForm,
-                          check_out_at: event.target.value,
-                        })
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="donor-form-actions">
-                  <button
-                    className="primary-action"
-                    type="submit"
-                    disabled={savingDonor}
-                  >
-                    {savingDonor
-                      ? 'Saving...'
-                      : editingDonorId !== null
-                        ? 'Save Changes'
-                        : 'Save Donor'}
-                  </button>
-
-                  <button
-                    className="secondary-action"
-                    type="button"
-                    onClick={resetDonorForm}
-                    disabled={savingDonor}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {donorError && <p className="donor-error">{donorError}</p>}
-
-            {donorsLoading ? (
-              <div className="empty-state">
-                <h3>Loading donors...</h3>
-              </div>
-            ) : donors.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon">♡</span>
-                <h3>No donors registered yet</h3>
-                <p>
-                  Click “Add Donor” to register the first blood donor.
-                </p>
-              </div>
-            ) : (
-              <div className="donor-table-wrapper">
-                <table className="donor-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Roll Number</th>
-                      <th>Blood Group</th>
-                      <th>Phone</th>
-                      <th>Department</th>
-                      <th>Batch</th>
-                      <th>Check-In</th>
-                      <th>Check-Out</th>
-                      {userProfile.role === 'coordinator' && (
-                        <th>Actions</th>
-                      )}
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {donors.map((donor) => (
-                      <tr key={donor.id}>
-                        <td>{donor.full_name}</td>
-                        <td>{donor.roll_number || '—'}</td>
-
-                        <td>
-                          <span className="blood-group-badge">
-                            {donor.blood_group}
-                          </span>
-                        </td>
-
-                        <td>{donor.phone || '—'}</td>
-                        <td>{donor.department || '—'}</td>
-                        <td>{donor.batch || '—'}</td>
-                        <td>{formatDateTime(donor.check_in_at)}</td>
-                        <td>{formatDateTime(donor.check_out_at)}</td>
-
-                        {userProfile.role === 'coordinator' && (
-                          <td>
-                            <button
-                              className="secondary-action"
-                              type="button"
-                              onClick={() => handleEditDonor(donor)}
-                            >
-                              Edit
-                            </button>
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={openExistingDonorForm}
+                >
+                  Register Existing Profile
+                </button>
               </div>
             )}
-          </section>
-        )
 
-      case 'attendance':
-        return (
-          <section className="dashboard-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Donor Attendance</h2>
-                <p>
-                  View donor camp attendance and time spent at the camp.
-                </p>
+            {editingDonorId === null && (
+              <div className="donor-time-field">
+                <label>Existing student profile</label>
+
+                <select
+                  value={existingDonorId}
+                  onChange={(event) => {
+                    setExistingDonorId(event.target.value)
+                    setDonorForm(emptyDonorForm)
+                  }}
+                >
+                  <option value="">Create a new student profile</option>
+
+                  {availableDonors.map((donor) => (
+                    <option key={donor.id} value={donor.id}>
+                      {donor.full_name} — {donor.roll_number || 'No roll number'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {!existingDonorId && (
+              <div className="donor-form-grid">
+                <input
+                  placeholder="Full name"
+                  value={donorForm.name}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      name: event.target.value,
+                    })
+                  }
+                  required
+                />
+
+                <input
+                  placeholder="College roll number"
+                  value={donorForm.roll_number}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      roll_number: event.target.value.toUpperCase(),
+                    })
+                  }
+                  required
+                />
+
+                <select
+                  value={donorForm.blood_group}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      blood_group: event.target.value,
+                    })
+                  }
+                  required
+                >
+                  <option value="">Select blood group</option>
+
+                  {bloodGroups.map((group) => (
+                    <option key={group} value={group}>
+                      {group}
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  type="tel"
+                  placeholder="Phone number"
+                  value={donorForm.phone}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      phone: event.target.value,
+                    })
+                  }
+                  required
+                />
+
+                <input
+                  placeholder="Department"
+                  value={donorForm.department}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      department: event.target.value,
+                    })
+                  }
+                  required
+                />
+
+                <input
+                  placeholder="Batch / Year"
+                  value={donorForm.batch}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      batch: event.target.value,
+                    })
+                  }
+                  required
+                />
+              </div>
+            )}
+
+            <div className="donor-form-grid">
+              <div className="donor-time-field">
+                <label>Drive check-in time</label>
+                <input
+                  type="datetime-local"
+                  value={donorForm.check_in_at}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      check_in_at: event.target.value,
+                    })
+                  }
+                />
+              </div>
+
+              <div className="donor-time-field">
+                <label>Drive check-out time</label>
+                <input
+                  type="datetime-local"
+                  value={donorForm.check_out_at}
+                  onChange={(event) =>
+                    setDonorForm({
+                      ...donorForm,
+                      check_out_at: event.target.value,
+                    })
+                  }
+                />
               </div>
             </div>
 
-            {donorError ? (
-              <p className="donor-error">{donorError}</p>
-            ) : donorsLoading ? (
-              <div className="empty-state">
-                <h3>Loading attendance records...</h3>
-              </div>
-            ) : donors.length === 0 ? (
-              <div className="empty-state">
-                <span className="empty-icon">✓</span>
-                <h3>No attendance records yet</h3>
-                <p>
-                  Donor attendance will appear here after donors are registered.
-                </p>
-              </div>
-            ) : (
-              <div className="donor-table-wrapper">
-                <table className="donor-table">
-                  <thead>
-                    <tr>
-                      <th>Student Name</th>
-                      <th>Roll Number</th>
-                      <th>Department</th>
-                      <th>Batch</th>
-                      <th>Check-In</th>
-                      <th>Check-Out</th>
-                      <th>Duration</th>
-                    </tr>
-                  </thead>
+            <div className="donor-form-actions">
+              <button className="primary-action" disabled={savingDonor}>
+                {savingDonor ? 'Saving...' : 'Save Registration'}
+              </button>
 
-                  <tbody>
-                    {donors.map((donor) => (
-                      <tr key={donor.id}>
-                        <td>{donor.full_name}</td>
-                        <td>{donor.roll_number || '—'}</td>
-                        <td>{donor.department || '—'}</td>
-                        <td>{donor.batch || '—'}</td>
-                        <td>{formatDateTime(donor.check_in_at)}</td>
-                        <td>{formatDateTime(donor.check_out_at)}</td>
+              <button
+                type="button"
+                className="secondary-action"
+                onClick={resetDonorForm}
+                disabled={savingDonor}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+
+        {donorError && <p className="donor-error">{donorError}</p>}
+
+        {selectedDrive && (
+          donorsLoading ? (
+            <div className="empty-state">
+              <h3>Loading donors...</h3>
+            </div>
+          ) : donors.length === 0 ? (
+            <div className="empty-state">
+              <span className="empty-icon">♡</span>
+              <h3>No students registered for this drive</h3>
+              <p>Register a new student or add an existing student profile.</p>
+            </div>
+          ) : (
+            <div className="donor-table-wrapper">
+              <table className="donor-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Roll Number</th>
+                    <th>Blood Group</th>
+                    <th>Phone</th>
+                    <th>Department</th>
+                    <th>Batch</th>
+                    {isCoordinator && <th>Actions</th>}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {donors.map((donor) => (
+                    <tr key={donor.id}>
+                      <td>{donor.full_name}</td>
+                      <td>{donor.roll_number || '—'}</td>
+
+                      <td>
+                        <span className="blood-group-badge">
+                          {donor.blood_group}
+                        </span>
+                      </td>
+
+                      <td>{donor.phone || '—'}</td>
+                      <td>{donor.department || '—'}</td>
+                      <td>{donor.batch || '—'}</td>
+
+                      {isCoordinator && (
                         <td>
-                          {calculateDuration(
-                            donor.check_in_at,
-                            donor.check_out_at
+                          {driveIsWritable && (
+                            <>
+                              <button
+                                className="secondary-action"
+                                type="button"
+                                onClick={() => handleEditDonor(donor)}
+                              >
+                                Edit
+                              </button>
+
+                              <button
+                                className="secondary-action"
+                                type="button"
+                                disabled={removingDonorId === donor.id}
+                                onClick={() => removeDonorFromDrive(donor)}
+                              >
+                                Remove
+                              </button>
+                            </>
                           )}
                         </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )
-
-      case 'logs':
-        return (
-          <section className="dashboard-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Class-Time Logs</h2>
-                <p>
-                  Assign class-hour attendance credit to students who donated
-                  blood.
-                </p>
-              </div>
-
-              {userProfile.role === 'coordinator' && (
-                <button
-                  className="primary-action"
-                  type="button"
-                  onClick={() => {
-                    if (showClassLogForm) {
-                      resetClassLogForm()
-                    } else {
-                      setClassLogsError('')
-                      setShowClassLogForm(true)
-                    }
-                  }}
-                >
-                  {showClassLogForm ? 'Cancel' : '+ New Credit'}
-                </button>
-              )}
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
+          )
+        )}
+      </section>
+    )
+  }
 
-            {showClassLogForm && userProfile.role === 'coordinator' && (
+  // ---------------- ATTENDANCE PAGE ----------------
+
+  function renderAttendancePage() {
+    return (
+      <section className="dashboard-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Drive Attendance</h2>
+            <p>Check-in and check-out records for the selected drive.</p>
+          </div>
+        </div>
+
+        {!selectedDrive ? (
+          <div className="empty-state">
+            <h3>Select a drive first</h3>
+          </div>
+        ) : donorsLoading ? (
+          <div className="empty-state">
+            <h3>Loading attendance...</h3>
+          </div>
+        ) : donors.length === 0 ? (
+          <div className="empty-state">
+            <h3>No participants registered yet</h3>
+          </div>
+        ) : (
+          <div className="donor-table-wrapper">
+            <table className="donor-table">
+              <thead>
+                <tr>
+                  <th>Student</th>
+                  <th>Roll Number</th>
+                  <th>Check-In</th>
+                  <th>Check-Out</th>
+                  <th>Duration</th>
+                  {isCoordinator && <th>Actions</th>}
+                </tr>
+              </thead>
+
+              <tbody>
+                {donors.map((donor) => (
+                  <tr key={donor.id}>
+                    <td>{donor.full_name}</td>
+                    <td>{donor.roll_number || '—'}</td>
+                    <td>{formatDateTime(donor.check_in_at)}</td>
+                    <td>{formatDateTime(donor.check_out_at)}</td>
+
+                    <td>
+                      {calculateDuration(
+                        donor.check_in_at,
+                        donor.check_out_at
+                      )}
+                    </td>
+
+                    {isCoordinator && (
+                      <td>
+                        {driveIsWritable && (
+                          <>
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              onClick={() =>
+                                updateParticipationTime(donor, 'check_in_at')
+                              }
+                            >
+                              {donor.check_in_at ? 'Undo In' : 'Check In'}
+                            </button>
+
+                            <button
+                              type="button"
+                              className="secondary-action"
+                              disabled={!donor.check_in_at}
+                              onClick={() =>
+                                updateParticipationTime(donor, 'check_out_at')
+                              }
+                            >
+                              {donor.check_out_at ? 'Undo Out' : 'Check Out'}
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    )
+  }
+
+  // ---------------- CLASS LOG PAGE ----------------
+
+  function renderLogsPage() {
+    return (
+      <section className="dashboard-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Class-Time Logs</h2>
+            <p>Class-hour credits for the selected drive.</p>
+          </div>
+
+          {isCoordinator && driveIsWritable && selectedDrive && (
+            <button
+              className="primary-action"
+              type="button"
+              onClick={() =>
+                setShowClassLogForm((current) => !current)
+              }
+            >
+              {showClassLogForm ? 'Cancel' : '+ New Credit'}
+            </button>
+          )}
+        </div>
+
+        {!selectedDrive ? (
+          <div className="empty-state">
+            <h3>Select a drive first</h3>
+          </div>
+        ) : (
+          <>
+            {!driveIsWritable && (
+              <p className="donor-error">
+                This drive is {selectedDrive.status}. Credits are read-only.
+              </p>
+            )}
+
+            {showClassLogForm && isCoordinator && driveIsWritable && (
               <form className="donor-form" onSubmit={handleSaveClassLog}>
                 <h3>Assign Class Attendance Credit</h3>
 
                 <div className="donor-form-grid">
                   <div className="donor-time-field">
-                    <label htmlFor="class-credit-student">Student</label>
+                    <label>Student</label>
 
                     <select
-                      id="class-credit-student"
                       value={classLogForm.donor_id}
                       onChange={(event) =>
                         setClassLogForm({
@@ -800,21 +1428,16 @@ function App() {
 
                       {donors.map((donor) => (
                         <option key={donor.id} value={donor.id}>
-                          {donor.full_name} — {donor.roll_number || 'No roll number'} —{' '}
-                          {donor.department || 'No department'}
-                          {donor.batch ? ` (${donor.batch})` : ''}
+                          {donor.full_name} — {donor.roll_number || 'No roll number'}
                         </option>
                       ))}
                     </select>
                   </div>
 
                   <div className="donor-time-field">
-                    <label htmlFor="class-credit-date">
-                      Attendance date
-                    </label>
+                    <label>Attendance date</label>
 
                     <input
-                      id="class-credit-date"
                       type="date"
                       value={classLogForm.credit_date}
                       onChange={(event) =>
@@ -856,17 +1479,15 @@ function App() {
                 <div className="donor-form-actions">
                   <button
                     className="primary-action"
-                    type="submit"
                     disabled={savingClassLog}
                   >
                     {savingClassLog ? 'Saving...' : 'Save Credits'}
                   </button>
 
                   <button
-                    className="secondary-action"
                     type="button"
+                    className="secondary-action"
                     onClick={resetClassLogForm}
-                    disabled={savingClassLog}
                   >
                     Cancel
                   </button>
@@ -880,15 +1501,12 @@ function App() {
 
             {classLogsLoading ? (
               <div className="empty-state">
-                <h3>Loading class-time logs...</h3>
+                <h3>Loading credits...</h3>
               </div>
             ) : classLogs.length === 0 ? (
               <div className="empty-state">
                 <span className="empty-icon">◷</span>
-                <h3>No class credits recorded yet</h3>
-                <p>
-                  Use “New Credit” to assign attendance credit to a student.
-                </p>
+                <h3>No class credits for this drive</h3>
               </div>
             ) : (
               <div className="donor-table-wrapper">
@@ -913,16 +1531,12 @@ function App() {
 
                       return (
                         <tr key={log.id}>
-                          <td>
-                            {log.donor?.full_name || 'Unknown student'}
-                          </td>
+                          <td>{log.donor?.full_name || 'Unknown'}</td>
                           <td>{log.donor?.roll_number || '—'}</td>
                           <td>{log.donor?.department || '—'}</td>
                           <td>{log.donor?.batch || '—'}</td>
                           <td>{log.credit_date}</td>
-                          <td>
-                            {hour?.label || `Hour ${log.hour_number}`}
-                          </td>
+                          <td>{hour?.label || `Hour ${log.hour_number}`}</td>
                           <td>{hour?.time || '—'}</td>
                         </tr>
                       )
@@ -931,88 +1545,123 @@ function App() {
                 </table>
               </div>
             )}
-          </section>
-        )
+          </>
+        )}
+      </section>
+    )
+  }
 
-      case 'reports':
-        return (
-          <section className="dashboard-panel">
-            <div className="panel-heading">
-              <div>
-                <h2>Reports</h2>
-                <p>Generate official attendance sheets and summaries.</p>
-              </div>
+  // ---------------- REPORTS PAGE ----------------
+
+  function renderReportsPage() {
+    return (
+      <section className="dashboard-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Reports</h2>
+            <p>Reports will be generated separately for each drive.</p>
+          </div>
+        </div>
+
+        <div className="empty-state">
+          <span className="empty-icon">▤</span>
+          <h3>Reports are not implemented yet</h3>
+          <p>We'll add printable donor and class-hour reports next.</p>
+        </div>
+      </section>
+    )
+  }
+
+  // ---------------- OVERVIEW PAGE ----------------
+
+  function renderOverview() {
+    return (
+      <>
+        <section className="stats-grid">
+          <article className="stat-card">
+            <div className="stat-icon red">♥</div>
+            <p className="stat-label">Total Drives</p>
+            <h3>{drives.length}</h3>
+            <span className="stat-note">All created drives</span>
+          </article>
+
+          <article className="stat-card">
+            <div className="stat-icon green">♡</div>
+            <p className="stat-label">Drive Participants</p>
+            <h3>{donors.length}</h3>
+            <span className="stat-note">Selected drive</span>
+          </article>
+
+          <article className="stat-card">
+            <div className="stat-icon orange">◷</div>
+            <p className="stat-label">Class-Hour Credits</p>
+            <h3>{classLogs.length}</h3>
+            <span className="stat-note">Selected drive</span>
+          </article>
+
+          <article className="stat-card">
+            <div className="stat-icon purple">✓</div>
+            <p className="stat-label">Checked In</p>
+            <h3>
+              {donors.filter((donor) => donor.check_in_at).length}
+            </h3>
+            <span className="stat-note">Selected drive</span>
+          </article>
+        </section>
+
+        <section className="dashboard-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Welcome to your dashboard</h2>
+              <p>Your NSS Blood Donation Cell records, organized by drive.</p>
             </div>
+          </div>
 
-            <div className="empty-state">
-              <span className="empty-icon">▤</span>
-              <h3>Reports will appear here</h3>
+          <div className="welcome-content">
+            <div className="welcome-symbol">✦</div>
+
+            <div>
+              <h3>
+                {selectedDrive ? selectedDrive.name : 'No drive selected'}
+              </h3>
+
               <p>
-                We’ll build printable reports after connecting the records.
+                {selectedDrive
+                  ? `Status: ${selectedDrive.status}. Use the menu to manage its donors, attendance and class-hour credits.`
+                  : 'Open Drive Management to create or select a drive.'}
               </p>
             </div>
-          </section>
-        )
+          </div>
+        </section>
+      </>
+    )
+  }
+
+  // ---------------- DASHBOARD CONTENT ----------------
+
+  function renderDashboardContent() {
+    switch (activePage) {
+      case 'drives':
+        return renderDrivesPage()
+
+      case 'donors':
+        return renderDonorPage()
+
+      case 'attendance':
+        return renderAttendancePage()
+
+      case 'logs':
+        return renderLogsPage()
+
+      case 'reports':
+        return renderReportsPage()
 
       default:
-        return (
-          <>
-            <section className="stats-grid">
-              <article className="stat-card">
-                <div className="stat-icon red">♡</div>
-                <p className="stat-label">Registered Donors</p>
-                <h3>{donors.length}</h3>
-                <span className="stat-note">Registered donors</span>
-              </article>
-
-              <article className="stat-card">
-                <div className="stat-icon green">✓</div>
-                <p className="stat-label">Attendance Records</p>
-                <h3>—</h3>
-                <span className="stat-note">Live count coming soon</span>
-              </article>
-
-              <article className="stat-card">
-                <div className="stat-icon orange">◷</div>
-                <p className="stat-label">Class-Time Logs</p>
-                <h3>{classLogs.length}</h3>
-                <span className="stat-note">Saved class-hour credits</span>
-              </article>
-
-              <article className="stat-card">
-                <div className="stat-icon purple">▤</div>
-                <p className="stat-label">Reports Generated</p>
-                <h3>—</h3>
-                <span className="stat-note">Report feature coming soon</span>
-              </article>
-            </section>
-
-            <section className="dashboard-panel">
-              <div className="panel-heading">
-                <div>
-                  <h2>Welcome to your dashboard</h2>
-                  <p>
-                    Your NSS Blood Donation Cell records, all in one place.
-                  </p>
-                </div>
-              </div>
-
-              <div className="welcome-content">
-                <div className="welcome-symbol">✦</div>
-                <div>
-                  <h3>Let's get your registry started</h3>
-                  <p>
-                    Use the navigation menu to explore the donor registry,
-                    attendance, class-time logs, and reports. We’ll connect
-                    each section to your Supabase database.
-                  </p>
-                </div>
-              </div>
-            </section>
-          </>
-        )
+        return renderOverview()
     }
   }
+
+  // ---------------- DASHBOARD ----------------
 
   if (userProfile) {
     return (
@@ -1020,6 +1669,7 @@ function App() {
         <aside className="dashboard-sidebar">
           <div className="dashboard-brand">
             <div className="brand-mark">✦</div>
+
             <div>
               <strong>NSS Blood Cell</strong>
               <span>Management Portal</span>
@@ -1051,11 +1701,7 @@ function App() {
 
               <div className="user-details">
                 <strong>{userProfile.full_name}</strong>
-                <span>
-                  {userProfile.role === 'coordinator'
-                    ? 'Coordinator'
-                    : 'Faculty'}
-                </span>
+                <span>{isCoordinator ? 'Coordinator' : 'Faculty'}</span>
               </div>
             </div>
 
@@ -1085,11 +1731,7 @@ function App() {
             <div className="topbar-user">
               <div className="topbar-user-text">
                 <strong>{userProfile.full_name}</strong>
-                <span>
-                  {userProfile.role === 'coordinator'
-                    ? 'Coordinator'
-                    : 'Faculty'}
-                </span>
+                <span>{isCoordinator ? 'Coordinator' : 'Faculty'}</span>
               </div>
 
               <div className="user-avatar topbar-avatar">
@@ -1099,7 +1741,120 @@ function App() {
           </header>
 
           <div className="dashboard-body">
+            <section className="dashboard-panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Current Drive</h2>
+
+                  <p>
+                    {selectedDrive
+                      ? `${selectedDrive.name} · ${selectedDrive.status}`
+                      : 'Choose a drive to view its records.'}
+                  </p>
+                </div>
+
+                <select
+                  value={selectedDriveId}
+                  onChange={(event) =>
+                    setSelectedDriveId(event.target.value)
+                  }
+                  disabled={drives.length === 0}
+                  aria-label="Select current drive"
+                >
+                  <option value="">Select a drive</option>
+
+                  {drives.map((drive) => (
+                    <option key={drive.id} value={drive.id}>
+                      {drive.name} ({drive.status})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+
             {renderDashboardContent()}
+
+            {/* CUSTOM STUDENT REMOVAL POPUP */}
+            {pendingDonorRemoval && (
+              <div
+                className="removal-modal-backdrop"
+                onClick={() => {
+                  if (removingDonorId === null) {
+                    setPendingDonorRemoval(null)
+                    setRemovalError('')
+                  }
+                }}
+              >
+                <div
+                  className="removal-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="removal-modal-title"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="removal-modal-icon">!</div>
+
+                  <h2 id="removal-modal-title">Remove student?</h2>
+
+                  <p className="removal-modal-student">
+                    {pendingDonorRemoval.full_name}
+                  </p>
+
+                  <p className="removal-modal-description">
+                    Are you sure you want to remove this student from
+                    <strong> {selectedDrive?.name}</strong>?
+                  </p>
+
+                  <div className="removal-modal-notice">
+                    <p>
+                      <strong>What happens next?</strong>
+                    </p>
+
+                    <ul>
+                      <li>
+                        The student will be removed from this drive only.
+                      </li>
+                      <li>Their permanent student profile will remain.</li>
+                      <li>
+                        Their participation in other drives will remain.
+                      </li>
+                      <li>
+                        Existing class-hour credits will be preserved.
+                      </li>
+                    </ul>
+                  </div>
+
+                  {removalError && (
+                    <p className="donor-error">{removalError}</p>
+                  )}
+
+                  <div className="removal-modal-actions">
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      disabled={removingDonorId !== null}
+                      onClick={() => {
+                        setPendingDonorRemoval(null)
+                        setRemovalError('')
+                      }}
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      className="remove-confirm-button"
+                      disabled={removingDonorId !== null}
+                      onClick={confirmDonorRemoval}
+                    >
+                      {removingDonorId !== null
+                        ? 'Removing...'
+                        : 'Remove Student'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <footer className="dashboard-footer">
@@ -1109,6 +1864,8 @@ function App() {
       </main>
     )
   }
+
+  // ---------------- LOGIN PAGE ----------------
 
   return (
     <main className="auth-page">
@@ -1123,23 +1880,22 @@ function App() {
             <h1>Blood Donor Registry &amp; Class-Time Log</h1>
 
             <p className="banner-description">
-              Role-based portal for logging student blood donors and
-              assigning class-hour attendance credits.
+              Role-based portal for managing student blood donation drives,
+              donor records and class-hour credits.
             </p>
 
             <div className="access-card">
-              <h3>Coordinator Access (Read &amp; Write)</h3>
+              <h3>Coordinator Access</h3>
               <p>
-                Manage donor records, attendance, class-time logs, and
-                official print sheets.
+                Create drives, manage donor registrations, attendance and
+                class-time credits.
               </p>
             </div>
 
             <div className="access-card faculty-card">
               <h3>Faculty Access</h3>
               <p>
-                View shared records, verify attendance, and access
-                official attendance sheets.
+                View shared drive records and verify attendance information.
               </p>
             </div>
           </div>
@@ -1201,7 +1957,9 @@ function App() {
                 <button
                   type="button"
                   className="show-password"
-                  onClick={() => setShowPassword((current) => !current)}
+                  onClick={() =>
+                    setShowPassword((current) => !current)
+                  }
                 >
                   {showPassword ? 'Hide password' : 'Show password'}
                 </button>
@@ -1221,7 +1979,9 @@ function App() {
               </div>
             </div>
 
-            {message && <p className="auth-message">{message}</p>}
+            {message && (
+              <p className="auth-message">{message}</p>
+            )}
 
             <button
               className="signin-button"

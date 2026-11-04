@@ -1129,3 +1129,138 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* Student removal confirmation popup */
+
+.removal-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(20, 20, 25, 0.58);
+  backdrop-filter: blur(4px);
+}
+
+.removal-modal {
+  width: 100%;
+  max-width: 440px;
+  padding: 30px;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.25);
+  animation: removalModalIn 0.2s ease-out;
+}
+
+@keyframes removalModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.removal-modal-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+  border-radius: 50%;
+  background: #fff0f0;
+  color: #d93030;
+  font-size: 25px;
+  font-weight: 800;
+}
+
+.removal-modal h2 {
+  margin: 0 0 12px;
+  color: #24242a;
+  font-size: 23px;
+}
+
+.removal-modal-student {
+  margin: 0 0 8px;
+  color: #292932;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.removal-modal-description {
+  margin: 0 0 20px;
+  color: #686873;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.removal-modal-notice {
+  padding: 16px;
+  border: 1px solid #f0dada;
+  border-radius: 12px;
+  background: #fff8f8;
+  color: #55515a;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.removal-modal-notice p {
+  margin: 0 0 8px;
+  color: #34313a;
+}
+
+.removal-modal-notice ul {
+  margin: 0;
+  padding-left: 19px;
+}
+
+.removal-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.remove-confirm-button {
+  padding: 10px 17px;
+  border: none;
+  border-radius: 8px;
+  background: #d93030;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.remove-confirm-button:hover:not(:disabled) {
+  background: #b92323;
+}
+
+.remove-confirm-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.removal-modal-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+@media (max-width: 480px) {
+  .removal-modal {
+    padding: 22px;
+  }
+
+  .removal-modal-actions {
+    flex-direction: column-reverse;
+  }
+
+  .removal-modal-actions button {
+    width: 100%;
+  }
+}
