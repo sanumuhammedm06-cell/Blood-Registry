@@ -1,5 +1,6 @@
 
 import { useEffect, useState } from 'react'
+import * as XLSX from 'xlsx'
 import { supabase } from './lib/supabase'
 import './App.css'
 
@@ -106,6 +107,14 @@ function App() {
   const [savingDrive, setSavingDrive] = useState(false)
   const [driveForm, setDriveForm] = useState(emptyDriveForm)
 
+  // Permanent drive deletion confirmation
+  const [pendingDriveDeletion, setPendingDriveDeletion] = useState(null)
+  const [driveDeleteConfirmation, setDriveDeleteConfirmation] = useState('')
+  const [driveDeletePassword, setDriveDeletePassword] = useState('')
+  const [showDriveDeletePassword, setShowDriveDeletePassword] = useState(false)
+  const [deletingDrive, setDeletingDrive] = useState(false)
+  const [driveDeleteError, setDriveDeleteError] = useState('')
+
   // ---------------- DONORS ----------------
 
   const [donors, setDonors] = useState([])
@@ -136,6 +145,14 @@ function App() {
     credit_date: getTodayDate(),
     hours: [],
   })
+
+  // ---------------- REPORTS ----------------
+
+  const [reportDriveFilter, setReportDriveFilter] = useState('all')
+  const [reportParticipants, setReportParticipants] = useState([])
+  const [reportCredits, setReportCredits] = useState([])
+  const [reportsLoading, setReportsLoading] = useState(false)
+  const [reportsError, setReportsError] = useState('')
 
   // ---------------- DERIVED VALUES ----------------
 
@@ -204,10 +221,19 @@ function App() {
     setDonors([])
     setAllDonors([])
     setClassLogs([])
+    setReportParticipants([])
+    setReportCredits([])
 
     setPendingDonorRemoval(null)
     setRemovalError('')
     setRemovingDonorId(null)
+
+    setPendingDriveDeletion(null)
+    setDriveDeleteConfirmation('')
+    setDriveDeletePassword('')
+    setShowDriveDeletePassword(false)
+    setDriveDeleteError('')
+    setDeletingDrive(false)
 
     resetDonorForm()
     resetClassLogForm()
@@ -344,6 +370,102 @@ function App() {
       await fetchDrives()
     } catch (error) {
       setDriveError(error.message || 'Could not update drive.')
+    }
+  }
+
+  function requestDriveDeletion(drive) {
+    if (!isCoordinator || !drive) return
+
+    setDriveDeleteError('')
+    setDriveDeleteConfirmation('')
+    setDriveDeletePassword('')
+    setShowDriveDeletePassword(false)
+    setPendingDriveDeletion(drive)
+  }
+
+  function closeDriveDeletion() {
+    if (deletingDrive) return
+
+    setPendingDriveDeletion(null)
+    setDriveDeleteConfirmation('')
+    setDriveDeletePassword('')
+    setShowDriveDeletePassword(false)
+    setDriveDeleteError('')
+  }
+
+  async function confirmDriveDeletion(event) {
+    event.preventDefault()
+
+    const drive = pendingDriveDeletion
+
+    if (!drive || !isCoordinator || deletingDrive) return
+
+    if (driveDeleteConfirmation !== drive.name) {
+      setDriveDeleteError('The drive name does not match. Enter it exactly as shown.')
+      return
+    }
+
+    if (!driveDeletePassword) {
+      setDriveDeleteError('Enter your current coordinator password.')
+      return
+    }
+
+    setDeletingDrive(true)
+    setDriveDeleteError('')
+
+    try {
+      // Get the currently authenticated account.
+      const { data: userData, error: userError } = await supabase.auth.getUser()
+
+      if (userError) throw userError
+
+      const currentUser = userData?.user
+
+      if (!currentUser?.email || currentUser.id !== userProfile?.id) {
+        throw new Error('Your authenticated account could not be verified. Sign in again.')
+      }
+
+      // Re-verify the coordinator's password with Supabase Auth.
+      const { data: authData, error: authError } =
+        await supabase.auth.signInWithPassword({
+          email: currentUser.email,
+          password: driveDeletePassword,
+        })
+
+      if (authError) {
+        throw new Error('Password verification failed. Check your password and try again.')
+      }
+
+      if (!authData?.user || authData.user.id !== userProfile.id) {
+        throw new Error('The verified account does not match the signed-in coordinator.')
+      }
+
+      // The database function independently checks coordinator role,
+      // recent authentication and the exact drive name.
+      const { error: deleteError } = await supabase.rpc('delete_drive', {
+        p_drive_id: drive.id,
+        p_confirmation_name: driveDeleteConfirmation,
+      })
+
+      if (deleteError) throw deleteError
+
+      // Clear the modal and refresh the drive list.
+      setPendingDriveDeletion(null)
+      setDriveDeleteConfirmation('')
+      setDriveDeletePassword('')
+      setShowDriveDeletePassword(false)
+      setDriveDeleteError('')
+
+      if (String(selectedDriveId) === String(drive.id)) {
+        setActivePage('drives')
+      }
+
+      await fetchDrives()
+      await fetchAllDonors()
+    } catch (error) {
+      setDriveDeleteError(error.message || 'Could not permanently delete this drive.')
+    } finally {
+      setDeletingDrive(false)
     }
   }
 
@@ -748,6 +870,170 @@ function App() {
     }
   }
 
+  // ---------------- REPORT DATA ----------------
+
+  async function fetchReports() {
+    setReportsLoading(true)
+    setReportsError('')
+
+    try {
+      const [participantsResult, creditsResult] = await Promise.all([
+        supabase
+          .from('drive_donors')
+          .select(`
+            id,
+            drive_id,
+            donor_id,
+            check_in_at,
+            check_out_at,
+            donor:donors (
+              id,
+              full_name,
+              roll_number,
+              blood_group,
+              department,
+              batch
+            )
+          `)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('class_hour_credits')
+          .select(`
+            id,
+            drive_id,
+            donor_id,
+            credit_date,
+            hour_number,
+            donor:donors (
+              id,
+              full_name,
+              roll_number,
+              department,
+              batch
+            )
+          `)
+          .order('credit_date', { ascending: false }),
+      ])
+
+      if (participantsResult.error) throw participantsResult.error
+      if (creditsResult.error) throw creditsResult.error
+
+      setReportParticipants(
+        (participantsResult.data || []).filter((row) => row.donor)
+      )
+      setReportCredits(
+        (creditsResult.data || []).filter((row) => row.donor)
+      )
+    } catch (error) {
+      setReportsError(error.message || 'Could not load report data.')
+    } finally {
+      setReportsLoading(false)
+    }
+  }
+
+  function downloadCsv(filename, rows) {
+    if (!rows.length) {
+      setReportsError('There are no records to export for this selection.')
+      return
+    }
+
+    const headers = Object.keys(rows[0])
+    const escapeCell = (value) => {
+      const text = value === null || value === undefined ? '' : String(value)
+      return `"${text.replace(/"/g, '""')}"`
+    }
+    const csv = [
+      headers.map(escapeCell).join(','),
+      ...rows.map((row) => headers.map((header) => escapeCell(row[header])).join(',')),
+    ].join('\r\n')
+
+    const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  function exportReportsToExcel(visibleReportDrives, visibleReportParticipants, visibleReportCredits) {
+    const driveName = (id) => drives.find((drive) => String(drive.id) === String(id))?.name || `Drive ${id}`
+    const participantRows = visibleReportParticipants.map((row) => ({
+      Drive: driveName(row.drive_id),
+      Student: row.donor.full_name || '',
+      'Roll Number': row.donor.roll_number || '',
+      'Blood Group': row.donor.blood_group || '',
+      Department: row.donor.department || '',
+      Batch: row.donor.batch || '',
+      'Check In': formatDateTime(row.check_in_at),
+      'Check Out': formatDateTime(row.check_out_at),
+      Duration: calculateDuration(row.check_in_at, row.check_out_at),
+    }))
+
+    const creditRows = visibleReportCredits.map((row) => ({
+      Drive: driveName(row.drive_id),
+      Student: row.donor.full_name || '',
+      'Roll Number': row.donor.roll_number || '',
+      Department: row.donor.department || '',
+      Batch: row.donor.batch || '',
+      Date: row.credit_date,
+      'Class Hour': classHours.find((hour) => hour.number === row.hour_number)?.label || `Hour ${row.hour_number}`,
+      'Hour Number': row.hour_number,
+    }))
+
+    const driveRows = visibleReportDrives.map((drive) => {
+      const registrations = reportParticipants.filter((row) => row.drive_id === drive.id)
+      return {
+        Drive: drive.name,
+        Location: drive.location || '',
+        Status: drive.status,
+        'Start Date': drive.start_date,
+        'End Date': drive.end_date || '',
+        'Registered Participants': registrations.length,
+        'Checked In': registrations.filter((row) => row.check_in_at).length,
+        'Checked Out': registrations.filter((row) => row.check_out_at).length,
+        'Class-Hour Credits': reportCredits.filter((row) => row.drive_id === drive.id).length,
+      }
+    })
+
+    const studentCreditGroups = Object.values(visibleReportCredits.reduce((summary, row) => {
+      const key = `${row.drive_id}-${row.donor_id}`
+      if (!summary[key]) {
+        summary[key] = {
+          Drive: driveName(row.drive_id),
+          Student: row.donor.full_name || '',
+          'Roll Number': row.donor.roll_number || '',
+          Department: row.donor.department || '',
+          Batch: row.donor.batch || '',
+          'Class Hours to Be Given': [],
+          'Total Credits': 0,
+        }
+      }
+
+      // Keep one entry for every saved credit record. If the same hour number
+      // was credited on different dates, it correctly appears more than once.
+      summary[key]['Class Hours to Be Given'].push(Number(row.hour_number))
+      summary[key]['Total Credits'] += 1
+      return summary
+    }, {}))
+
+    const studentCreditRows = studentCreditGroups.map((student) => ({
+      ...student,
+      'Class Hours to Be Given': student['Class Hours to Be Given']
+        .sort((a, b) => a - b)
+        .join(', '),
+    }))
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(driveRows), 'Drive Summary')
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(participantRows), 'Attendance')
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(creditRows), 'Class Credit Details')
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(studentCreditRows), 'Credits per Student')
+    XLSX.writeFile(workbook, `NSS-Reports-${getTodayDate()}.xlsx`)
+  }
+
   // ---------------- DATA LOADING ----------------
 
   useEffect(() => {
@@ -767,6 +1053,12 @@ function App() {
     fetchDonors()
     fetchClassLogs()
   }, [userProfile, selectedDriveId])
+
+  useEffect(() => {
+    if (userProfile && activePage === 'reports') {
+      fetchReports()
+    }
+  }, [userProfile, activePage])
 
   // ---------------- DRIVE PAGE ----------------
 
@@ -951,6 +1243,17 @@ function App() {
                             Archive
                           </button>
                         </>
+                      )}
+
+                      {isCoordinator && (
+                        <button
+                          className="remove-confirm-button"
+                          type="button"
+                          disabled={deletingDrive}
+                          onClick={() => requestDriveDeletion(drive)}
+                        >
+                          Delete Drive
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -1458,8 +1761,8 @@ function App() {
                     <label
                       key={hour.number}
                       className={`class-hour-option ${classLogForm.hours.includes(hour.number)
-                          ? 'selected'
-                          : ''
+                        ? 'selected'
+                        : ''
                         }`}
                     >
                       <input
@@ -1554,21 +1857,287 @@ function App() {
   // ---------------- REPORTS PAGE ----------------
 
   function renderReportsPage() {
-    return (
-      <section className="dashboard-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Reports</h2>
-            <p>Reports will be generated separately for each drive.</p>
-          </div>
-        </div>
+    const visibleReportDrives = reportDriveFilter === 'all'
+      ? drives
+      : drives.filter((drive) => String(drive.id) === String(reportDriveFilter))
 
-        <div className="empty-state">
-          <span className="empty-icon">▤</span>
-          <h3>Reports are not implemented yet</h3>
-          <p>We'll add printable donor and class-hour reports next.</p>
-        </div>
-      </section>
+    const visibleReportParticipants = reportParticipants.filter((row) =>
+      reportDriveFilter === 'all' || String(row.drive_id) === String(reportDriveFilter)
+    )
+
+    const visibleReportCredits = reportCredits.filter((row) =>
+      reportDriveFilter === 'all' || String(row.drive_id) === String(reportDriveFilter)
+    )
+
+    const bloodGroupCounts = bloodGroups.map((group) => ({
+      group,
+      count: visibleReportParticipants.filter(
+        (row) => row.donor?.blood_group === group
+      ).length,
+    }))
+
+    const checkedInCount = visibleReportParticipants.filter((row) => row.check_in_at).length
+    const checkedOutCount = visibleReportParticipants.filter((row) => row.check_out_at).length
+
+    const creditsByStudent = Object.values(visibleReportCredits.reduce((summary, row) => {
+      const key = `${row.drive_id}-${row.donor_id}`
+      if (!summary[key]) {
+        summary[key] = {
+          drive_id: row.drive_id,
+          donor_id: row.donor_id,
+          donor: row.donor,
+          totalCredits: 0,
+          dates: new Set(),
+        }
+      }
+      summary[key].totalCredits += 1
+      summary[key].dates.add(row.credit_date)
+      return summary
+    }, {})).map((item) => ({ ...item, dates: [...item.dates].sort() }))
+
+    const driveSummary = visibleReportDrives.map((drive) => {
+      const registrations = reportParticipants.filter((row) => row.drive_id === drive.id)
+      const credits = reportCredits.filter((row) => row.drive_id === drive.id)
+      return {
+        ...drive,
+        participantCount: registrations.length,
+        checkedInCount: registrations.filter((row) => row.check_in_at).length,
+        checkedOutCount: registrations.filter((row) => row.check_out_at).length,
+        creditCount: credits.length,
+      }
+    })
+
+    return (
+      <>
+        <section className="dashboard-panel reports-header-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Reports & Analytics</h2>
+              <p>Drive-wise donor registrations, attendance and class-hour credits.</p>
+            </div>
+            <div className="report-export-actions">
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => downloadCsv('NSS-Attendance.csv', visibleReportParticipants.map((row) => ({
+                  Drive: drives.find((drive) => drive.id === row.drive_id)?.name || `Drive ${row.drive_id}`,
+                  Student: row.donor?.full_name || '',
+                  'Roll Number': row.donor?.roll_number || '',
+                  'Blood Group': row.donor?.blood_group || '',
+                  Department: row.donor?.department || '',
+                  Batch: row.donor?.batch || '',
+                  'Check In': formatDateTime(row.check_in_at),
+                  'Check Out': formatDateTime(row.check_out_at),
+                  Duration: calculateDuration(row.check_in_at, row.check_out_at),
+                })))}
+              >
+                Export Attendance CSV
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => downloadCsv('NSS-Class-Credits.csv', visibleReportCredits.map((row) => ({
+                  Drive: drives.find((drive) => drive.id === row.drive_id)?.name || `Drive ${row.drive_id}`,
+                  Student: row.donor?.full_name || '',
+                  'Roll Number': row.donor?.roll_number || '',
+                  Department: row.donor?.department || '',
+                  Batch: row.donor?.batch || '',
+                  Date: row.credit_date,
+                  'Class Hour': classHours.find((hour) => hour.number === row.hour_number)?.label || `Hour ${row.hour_number}`,
+                })))}
+              >
+                Export Credits CSV
+              </button>
+              <button className="primary-action" type="button" onClick={() => exportReportsToExcel(visibleReportDrives, visibleReportParticipants, visibleReportCredits)}>
+                Download Excel (.xlsx)
+              </button>
+            </div>
+          </div>
+
+          <div className="report-filter-row">
+            <label htmlFor="report-drive-filter">Filter reports by drive</label>
+            <select
+              id="report-drive-filter"
+              value={reportDriveFilter}
+              onChange={(event) => setReportDriveFilter(event.target.value)}
+            >
+              <option value="all">All drives</option>
+              {drives.map((drive) => (
+                <option key={drive.id} value={String(drive.id)}>{drive.name}</option>
+              ))}
+            </select>
+            <button className="secondary-action" type="button" onClick={fetchReports} disabled={reportsLoading}>
+              {reportsLoading ? 'Refreshing...' : 'Refresh reports'}
+            </button>
+          </div>
+          {reportsError && <p className="donor-error">{reportsError}</p>}
+          <p className="report-note">Counts represent drive registrations. A student registered in two drives is counted once in each drive.</p>
+        </section>
+
+        {reportsLoading ? (
+          <section className="dashboard-panel"><div className="empty-state"><h3>Loading reports...</h3></div></section>
+        ) : (
+          <>
+            <section className="stats-grid reports-stats-grid">
+              <article className="stat-card">
+                <div className="stat-icon red">♥</div>
+                <p className="stat-label">Drive Registrations</p>
+                <h3>{visibleReportParticipants.length}</h3>
+                <span className="stat-note">Across selected drive scope</span>
+              </article>
+              <article className="stat-card">
+                <div className="stat-icon green">✓</div>
+                <p className="stat-label">Checked In</p>
+                <h3>{checkedInCount}</h3>
+                <span className="stat-note">Participants with check-in time</span>
+              </article>
+              <article className="stat-card">
+                <div className="stat-icon orange">↗</div>
+                <p className="stat-label">Checked Out</p>
+                <h3>{checkedOutCount}</h3>
+                <span className="stat-note">Participants with check-out time</span>
+              </article>
+              <article className="stat-card">
+                <div className="stat-icon purple">◷</div>
+                <p className="stat-label">Class-Hour Credits</p>
+                <h3>{visibleReportCredits.length}</h3>
+                <span className="stat-note">Individual credited hours</span>
+              </article>
+            </section>
+
+            <section className="dashboard-panel">
+              <div className="panel-heading">
+                <div><h2>Drive-wise Summary</h2><p>Participant and attendance totals for each drive.</p></div>
+              </div>
+              {driveSummary.length === 0 ? (
+                <div className="empty-state"><h3>No drives found</h3></div>
+              ) : (
+                <div className="donor-table-wrapper">
+                  <table className="donor-table">
+                    <thead><tr><th>Drive</th><th>Status</th><th>Participants</th><th>Checked In</th><th>Checked Out</th><th>Class Credits</th></tr></thead>
+                    <tbody>
+                      {driveSummary.map((drive) => (
+                        <tr key={drive.id}>
+                          <td><strong>{drive.name}</strong></td>
+                          <td><span className="blood-group-badge">{drive.status}</span></td>
+                          <td>{drive.participantCount}</td>
+                          <td>{drive.checkedInCount}</td>
+                          <td>{drive.checkedOutCount}</td>
+                          <td>{drive.creditCount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            <section className="dashboard-panel">
+              <div className="panel-heading">
+                <div><h2>Blood-Group Distribution</h2><p>Number of drive registrations in each blood group.</p></div>
+              </div>
+              <div className="blood-report-grid">
+                {bloodGroupCounts.map(({ group, count }) => {
+                  const percentage = visibleReportParticipants.length
+                    ? Math.round((count / visibleReportParticipants.length) * 100)
+                    : 0
+                  return (
+                    <article className="blood-report-card" key={group}>
+                      <div className="blood-report-top"><strong>{group}</strong><span>{count}</span></div>
+                      <div className="report-progress-track"><div className="report-progress-fill" style={{ width: `${percentage}%` }} /></div>
+                      <small>{percentage}% of registrations</small>
+                    </article>
+                  )
+                })}
+              </div>
+            </section>
+
+            <section className="dashboard-panel">
+              <div className="panel-heading">
+                <div><h2>Attendance Details</h2><p>Per-drive check-in and check-out timestamps.</p></div>
+              </div>
+              {visibleReportParticipants.length === 0 ? (
+                <div className="empty-state"><h3>No participant records for this selection</h3></div>
+              ) : (
+                <div className="donor-table-wrapper">
+                  <table className="donor-table">
+                    <thead><tr><th>Student</th><th>Roll Number</th><th>Blood Group</th><th>Drive</th><th>Check-In</th><th>Check-Out</th><th>Duration</th></tr></thead>
+                    <tbody>
+                      {visibleReportParticipants.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.donor?.full_name || '—'}</td>
+                          <td>{row.donor?.roll_number || '—'}</td>
+                          <td><span className="blood-group-badge">{row.donor?.blood_group || '—'}</span></td>
+                          <td>{drives.find((drive) => drive.id === row.drive_id)?.name || `Drive ${row.drive_id}`}</td>
+                          <td>{formatDateTime(row.check_in_at)}</td>
+                          <td>{formatDateTime(row.check_out_at)}</td>
+                          <td>{calculateDuration(row.check_in_at, row.check_out_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            <section className="dashboard-panel">
+              <div className="panel-heading">
+                <div><h2>Class-Hour Credits per Student</h2><p>Total credited class hours for each student in each drive.</p></div>
+              </div>
+              {creditsByStudent.length === 0 ? (
+                <div className="empty-state"><h3>No class-hour credits for this selection</h3></div>
+              ) : (
+                <div className="donor-table-wrapper">
+                  <table className="donor-table">
+                    <thead><tr><th>Student</th><th>Roll Number</th><th>Department</th><th>Batch</th><th>Drive</th><th>Total Credits</th><th>Dates Credited</th></tr></thead>
+                    <tbody>
+                      {creditsByStudent.map((item) => (
+                        <tr key={`${item.drive_id}-${item.donor_id}`}>
+                          <td>{item.donor?.full_name || '—'}</td>
+                          <td>{item.donor?.roll_number || '—'}</td>
+                          <td>{item.donor?.department || '—'}</td>
+                          <td>{item.donor?.batch || '—'}</td>
+                          <td>{drives.find((drive) => drive.id === item.drive_id)?.name || `Drive ${item.drive_id}`}</td>
+                          <td><strong>{item.totalCredits}</strong></td>
+                          <td>{item.dates.join(', ')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            <section className="dashboard-panel">
+              <div className="panel-heading">
+                <div><h2>Class-Hour Credit Details</h2><p>Individual credited class-hour records.</p></div>
+              </div>
+              {visibleReportCredits.length === 0 ? (
+                <div className="empty-state"><h3>No class-hour details for this selection</h3></div>
+              ) : (
+                <div className="donor-table-wrapper">
+                  <table className="donor-table">
+                    <thead><tr><th>Student</th><th>Roll Number</th><th>Department</th><th>Batch</th><th>Drive</th><th>Date</th><th>Class Hour</th></tr></thead>
+                    <tbody>
+                      {visibleReportCredits.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.donor?.full_name || '—'}</td>
+                          <td>{row.donor?.roll_number || '—'}</td>
+                          <td>{row.donor?.department || '—'}</td>
+                          <td>{row.donor?.batch || '—'}</td>
+                          <td>{drives.find((drive) => drive.id === row.drive_id)?.name || `Drive ${row.drive_id}`}</td>
+                          <td>{row.credit_date}</td>
+                          <td>{classHours.find((hour) => hour.number === row.hour_number)?.label || `Hour ${row.hour_number}`}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </>
     )
   }
 
@@ -1774,6 +2343,109 @@ function App() {
 
             {renderDashboardContent()}
 
+            {/* PERMANENT DRIVE DELETION POPUP */}
+            {pendingDriveDeletion && (
+              <div
+                className="removal-modal-backdrop"
+                onClick={closeDriveDeletion}
+              >
+                <form
+                  className="removal-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="drive-deletion-title"
+                  onSubmit={confirmDriveDeletion}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="removal-modal-icon">!</div>
+
+                  <h2 id="drive-deletion-title">Permanently delete drive?</h2>
+
+                  <p className="removal-modal-student">
+                    {pendingDriveDeletion.name}
+                  </p>
+
+                  <div className="removal-modal-notice">
+                    <p><strong>This action cannot be undone.</strong></p>
+                    <ul>
+                      <li>All registrations for this drive will be deleted.</li>
+                      <li>Class-hour credits and attendance records linked to this drive will be deleted.</li>
+                      <li>Class-time logs linked to this drive will be deleted.</li>
+                      <li>Permanent donor profiles and records in other drives will remain.</li>
+                    </ul>
+                  </div>
+
+                  <div className="donor-time-field">
+                    <label htmlFor="drive-delete-name">
+                      Type <strong>{pendingDriveDeletion.name}</strong> to confirm
+                    </label>
+                    <input
+                      id="drive-delete-name"
+                      type="text"
+                      autoComplete="off"
+                      value={driveDeleteConfirmation}
+                      onChange={(event) => setDriveDeleteConfirmation(event.target.value)}
+                      disabled={deletingDrive}
+                      required
+                    />
+                  </div>
+
+                  <div className="donor-time-field">
+                    <label htmlFor="drive-delete-password">
+                      Re-enter your coordinator password
+                    </label>
+                    <div className="label-row">
+                      <span />
+                      <button
+                        type="button"
+                        className="show-password"
+                        onClick={() => setShowDriveDeletePassword((current) => !current)}
+                        disabled={deletingDrive}
+                      >
+                        {showDriveDeletePassword ? 'Hide password' : 'Show password'}
+                      </button>
+                    </div>
+                    <input
+                      id="drive-delete-password"
+                      type={showDriveDeletePassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      value={driveDeletePassword}
+                      onChange={(event) => setDriveDeletePassword(event.target.value)}
+                      disabled={deletingDrive}
+                      required
+                    />
+                  </div>
+
+                  {driveDeleteError && (
+                    <p className="donor-error">{driveDeleteError}</p>
+                  )}
+
+                  <div className="removal-modal-actions">
+                    <button
+                      type="button"
+                      className="secondary-action"
+                      disabled={deletingDrive}
+                      onClick={closeDriveDeletion}
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="submit"
+                      className="remove-confirm-button"
+                      disabled={
+                        deletingDrive ||
+                        driveDeleteConfirmation !== pendingDriveDeletion.name ||
+                        !driveDeletePassword
+                      }
+                    >
+                      {deletingDrive ? 'Verifying & deleting...' : 'Permanently Delete'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
             {/* CUSTOM STUDENT REMOVAL POPUP */}
             {pendingDonorRemoval && (
               <div
@@ -1819,7 +2491,7 @@ function App() {
                         Their participation in other drives will remain.
                       </li>
                       <li>
-                        Existing class-hour credits will be preserved.
+                        Class-hour credits for this drive will be deleted automatically.
                       </li>
                     </ul>
                   </div>

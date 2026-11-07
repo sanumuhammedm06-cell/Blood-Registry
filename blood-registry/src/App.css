@@ -1264,3 +1264,141 @@ button:disabled {
     width: 100%;
   }
 }
+
+/* =========================
+   REPORTS
+========================= */
+
+.reports-header-panel {
+  overflow: visible;
+}
+
+.report-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.report-export-actions button,
+.report-filter-row button {
+  white-space: nowrap;
+}
+
+.report-filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.report-filter-row label {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.report-filter-row select {
+  min-width: 220px;
+  max-width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #fff;
+  color: #1e293b;
+  font: inherit;
+  font-size: 12px;
+}
+
+.report-note {
+  margin: 14px 0 0;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.blood-report-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 22px;
+}
+
+.blood-report-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.blood-report-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #1e293b;
+  font-size: 14px;
+}
+
+.blood-report-top strong {
+  color: #b91c1c;
+}
+
+.report-progress-track {
+  height: 7px;
+  margin: 13px 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #fee2e2;
+}
+
+.report-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #dc2626;
+  transition: width 0.2s ease;
+}
+
+.blood-report-card small {
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+@media (max-width: 1050px) {
+  .report-export-actions {
+    justify-content: flex-start;
+  }
+
+  .blood-report-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .report-filter-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .report-filter-row select,
+  .report-filter-row button,
+  .report-export-actions button {
+    width: 100%;
+  }
+
+  .report-export-actions {
+    width: 100%;
+  }
+
+  .blood-report-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+
+  .blood-report-card {
+    padding: 12px;
+  }
+}
